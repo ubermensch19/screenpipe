@@ -5,7 +5,7 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import { ChevronLeft, ChevronRight, ChevronDown, RefreshCw, CalendarIcon, Search, Play, Pause, Loader2, Mic, Volume2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, ChevronDown, RefreshCw, CalendarIcon, Search, Play, Pause, Loader2, Mic, Volume2, Pin, PinOff } from "lucide-react";
 import {
 	format,
 	isAfter,
@@ -76,7 +76,7 @@ export function TimelineControls({
 	onToggleDeviceMute,
 }: TimelineControlsProps) {
 	const { isMac } = usePlatform();
-	const { settings } = useSettings();
+	const { settings, updateSettings } = useSettings();
 	const [calendarOpen, setCalendarOpen] = useState(false);
 
 	// Set of "YYYY-MM-DD" local-day strings that have at least one frame.
@@ -297,6 +297,25 @@ export function TimelineControls({
 							</>
 						)}
 					</div>
+				)}
+
+				{/* Pin overlay (#4293): keep the frame visible on focus loss instead
+				    of auto-hiding. Only relevant for the floating overlay, not embedded. */}
+				{!embedded && (
+					<Button
+						variant="ghost"
+						size="icon"
+						onClick={() => updateSettings({ overlayPinned: !settings.overlayPinned })}
+						className={`h-10 w-10 bg-background border border-border transition-colors duration-150 ${
+							settings.overlayPinned
+								? "bg-foreground text-background hover:bg-foreground/90"
+								: "text-foreground hover:bg-foreground hover:text-background"
+						}`}
+						title={settings.overlayPinned ? "Unpin overlay (auto-hide on focus loss)" : "Pin overlay (keep open while you work elsewhere)"}
+						aria-pressed={settings.overlayPinned}
+					>
+						{settings.overlayPinned ? <Pin className="h-4 w-4" /> : <PinOff className="h-4 w-4" />}
+					</Button>
 				)}
 
 				{onSearchClick && (

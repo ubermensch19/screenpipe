@@ -625,6 +625,7 @@ let DEFAULT_SETTINGS: Settings = {
 				historyEnabled: true,
 			},
 			overlayMode: "fullscreen",
+			overlayPinned: false,
 			showOverlayInScreenRecording: false,
 			disableTimeline: false,
 			videoQuality: "balanced",

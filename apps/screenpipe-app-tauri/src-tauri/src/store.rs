@@ -848,6 +848,11 @@ pub struct SettingsStore {
     /// Disabled by default so the overlay doesn't appear in screenpipe's own recordings.
     #[serde(rename = "showOverlayInScreenRecording", default)]
     pub show_overlay_in_screen_recording: bool,
+    /// When true, the timeline overlay (fullscreen panel mode) stays open on focus
+    /// loss instead of auto-hiding, so a frame can be kept visible while the user
+    /// works in another app/window. Default false preserves the auto-hide. See #4293.
+    #[serde(rename = "overlayPinned", default)]
+    pub overlay_pinned: bool,
 
     // NOTE: `disableTimeline` lives on the flattened `recording`
     // (`RecordingSettings::disable_timeline`) so the engine can read it too. The
@@ -1290,6 +1295,7 @@ Rules:
             #[cfg(not(target_os = "macos"))]
             overlay_mode: "window".to_string(),
             show_overlay_in_screen_recording: false,
+            overlay_pinned: false,
             chat_always_on_top: true,
             show_restart_notifications: false,
             #[cfg(target_os = "macos")]

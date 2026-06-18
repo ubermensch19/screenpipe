@@ -2946,6 +2946,12 @@ overlayMode?: string;
  */
 showOverlayInScreenRecording?: boolean;
 /**
+ * When true, the timeline overlay (fullscreen panel mode) stays open on focus
+ * loss instead of auto-hiding, so a frame can be kept visible while the user
+ * works in another app/window. Default false preserves the auto-hide. See #4293.
+ */
+overlayPinned?: boolean;
+/**
  * When true, the chat window stays above all other windows (default: true).
  */
 chatAlwaysOnTop?: boolean;

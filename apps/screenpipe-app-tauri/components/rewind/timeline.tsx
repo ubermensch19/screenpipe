@@ -405,6 +405,8 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		// Window mode is a small movable window; cursor is often "outside" vs fullscreen
 		// monitor bounds, which incorrectly fired closeWindow and unregistered Escape.
 		if (settings?.overlayMode === "window") return;
+		// Pinned overlay (#4293): don't auto-close when the cursor leaves the monitor.
+		if (settings?.overlayPinned) return;
 		let initialScreenBounds: { x: number; y: number; width: number; height: number } | null = null;
 		let checkInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -459,7 +461,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 				clearInterval(checkInterval);
 			}
 		};
-	}, [embedded, settings?.overlayMode]);
+	}, [embedded, settings?.overlayMode, settings?.overlayPinned]);
 
 	// Helper to navigate to a timestamp
 	const navigateToTimestamp = useCallback(async (targetTimestamp: string) => {

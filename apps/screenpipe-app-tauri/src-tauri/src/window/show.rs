@@ -829,6 +829,18 @@ impl ShowRewindWindow {
                         match event {
                             tauri::WindowEvent::Focused(is_focused) => {
                                 if !is_focused {
+                                    // Pinned overlay (#4293): keep the panel visible on
+                                    // focus loss so the user can reference a frame while
+                                    // working in another app. Re-read each blur so toggling
+                                    // the pin while the overlay is open takes effect live.
+                                    let pinned = SettingsStore::get(&app_clone)
+                                        .ok()
+                                        .flatten()
+                                        .map(|s| s.overlay_pinned)
+                                        .unwrap_or(false);
+                                    if pinned {
+                                        return;
+                                    }
                                     // Synchronous alpha=0 — no order_out (which
                                     // causes focus-fight loops when restored).
                                     #[cfg(target_os = "macos")]
@@ -1229,6 +1241,18 @@ impl ShowRewindWindow {
                         #[cfg(not(target_os = "linux"))]
                         tauri::WindowEvent::Focused(is_focused) => {
                             if !is_focused {
+                                // Pinned overlay (#4293): keep the panel visible on focus
+                                // loss so the user can reference a frame while working in
+                                // another app. Re-read each blur so toggling pin while the
+                                // overlay is open takes effect live.
+                                let pinned = SettingsStore::get(&app_clone)
+                                    .ok()
+                                    .flatten()
+                                    .map(|s| s.overlay_pinned)
+                                    .unwrap_or(false);
+                                if pinned {
+                                    return;
+                                }
                                 info!("Main window lost focus, scheduling hide (300ms debounce)");
                                 // Synchronous alpha=0 — panel stays in window list
                                 // but is invisible. No order_out (causes focus loops).
