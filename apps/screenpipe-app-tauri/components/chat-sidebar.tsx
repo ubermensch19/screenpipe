@@ -70,6 +70,11 @@ import {
   updateConversationFlags,
 } from "@/lib/chat-storage";
 import { pipeSessionId } from "@/lib/events/types";
+import {
+  groupRecents,
+  runLabel,
+  type PipeRunGroup,
+} from "@/lib/sidebar-grouping";
 import { commands } from "@/lib/utils/tauri";
 import { isConversationHistorySyncPrompt } from "@/lib/chat-utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -388,7 +393,13 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
   };
 
   const { pinned, recents, archived } = useVisibleChatSections();
-  const recentsLimited = useMemo(() => recents.slice(0, 15), [recents]);
+  // Collapse each pipe's runs into one expandable row so a busy pipe no
+  // longer pushes chats (or its own older runs) off the 15-row cliff (#4362).
+  const { groups: recentGroups, others: recentOthers } = useMemo(
+    () => groupRecents(recents, 15),
+    [recents]
+  );
+  const recentsEmpty = recentGroups.length === 0 && recentOthers.length === 0;
   // Resolve each running pipe to its SessionRecord so the Scheduled-row
   // kebab can offer Pin / Rename / Archive / Delete with the same
   // semantics as Recents. Subscribes to the raw sessions map (not
@@ -725,27 +736,45 @@ export function ChatSidebar({ className, onViewAll }: ChatSidebarProps) {
                     <Skeleton key={i} className="h-6 w-full rounded-md" />
                   ))}
                 </div>
-              ) : recentsLimited.length === 0 ? (
+              ) : recentsEmpty ? (
                 <div className="px-2.5 py-2 text-xs text-muted-foreground/70 italic">
                   {pinned.length === 0 ? "no chats yet — click + to start" : "no recent chats"}
                 </div>
               ) : (
-                recentsLimited.map((s) => (
-                  <SidebarChatRow
-                    key={s.id}
-                    session={s}
-                    isCurrent={s.id === currentId}
-                    queuedCount={queueDepths.get(s.id) ?? 0}
-                    onSelect={handleSelect}
-                    onArchive={handleArchive}
-                    onUnarchive={handleUnarchive}
-                    onDeleteRequest={setDeletingSessionId}
-                    onTogglePin={handleTogglePin}
-                    onRenameRequest={handleRenameRequest}
-                    openConversationMenuId={openConversationMenuId}
-                    setOpenConversationMenuId={setOpenConversationMenuId}
-                  />
-                ))
+                <>
+                  {recentGroups.map((g) => (
+                    <PipeRunGroupRow
+                      key={`group:${g.pipeName}`}
+                      group={g}
+                      currentId={currentId}
+                      queueDepths={queueDepths}
+                      onSelect={handleSelect}
+                      onArchive={handleArchive}
+                      onUnarchive={handleUnarchive}
+                      onDeleteRequest={setDeletingSessionId}
+                      onTogglePin={handleTogglePin}
+                      onRenameRequest={handleRenameRequest}
+                      openConversationMenuId={openConversationMenuId}
+                      setOpenConversationMenuId={setOpenConversationMenuId}
+                    />
+                  ))}
+                  {recentOthers.map((s) => (
+                    <SidebarChatRow
+                      key={s.id}
+                      session={s}
+                      isCurrent={s.id === currentId}
+                      queuedCount={queueDepths.get(s.id) ?? 0}
+                      onSelect={handleSelect}
+                      onArchive={handleArchive}
+                      onUnarchive={handleUnarchive}
+                      onDeleteRequest={setDeletingSessionId}
+                      onTogglePin={handleTogglePin}
+                      onRenameRequest={handleRenameRequest}
+                      openConversationMenuId={openConversationMenuId}
+                      setOpenConversationMenuId={setOpenConversationMenuId}
+                    />
+                  ))}
+                </>
               )}
             </Section>
           </div>
@@ -1499,10 +1528,132 @@ function Section({
   );
 }
 
+/**
+ * One collapsed pipe in RECENTS: a header showing the pipe name + run count
+ * that expands to reveal every run as an indented row. Collapsing the runs
+ * into a single slot is the fix for #4362 — a pipe with 7 runs takes one row,
+ * not seven, so its runs (and unrelated chats) stop falling off the list.
+ *
+ * Collapse state persists per pipe. A group auto-expands while one of its
+ * runs is the current session so the open chat is never hidden behind a
+ * collapsed header.
+ */
+function PipeRunGroupRow({
+  group,
+  currentId,
+  queueDepths,
+  onSelect,
+  onArchive,
+  onUnarchive,
+  onDeleteRequest,
+  onTogglePin,
+  onRenameRequest,
+  openConversationMenuId,
+  setOpenConversationMenuId,
+}: {
+  group: PipeRunGroup;
+  currentId: string | null;
+  queueDepths: Map<string, number>;
+  onSelect: (id: string) => void;
+  onArchive: (id: string) => Promise<void> | void;
+  onUnarchive: (id: string) => Promise<void> | void;
+  onDeleteRequest: (id: string | null) => void;
+  onTogglePin: (id: string) => Promise<void> | void;
+  onRenameRequest: (id: string) => void;
+  openConversationMenuId?: string | null;
+  setOpenConversationMenuId?: (id: string | null) => void;
+}) {
+  const { pipeName, runs } = group;
+  const [collapsed, setCollapsed] = useCollapsedPref(
+    `screenpipe:pipe-group-collapsed:${pipeName}`,
+    true
+  );
+  const containsCurrent = runs.some((r) => r.id === currentId);
+  const expanded = !collapsed || containsCurrent;
+  const anyLive = runs.some(
+    (r) =>
+      r.status === "streaming" || r.status === "thinking" || r.status === "tool"
+  );
+  const anyUnread = runs.some((r) => r.unread && r.id !== currentId);
+
+  return (
+    <div className="flex flex-col">
+      <button
+        type="button"
+        onClick={() => setCollapsed(!collapsed)}
+        className={cn(
+          "group/grp relative flex items-center gap-2 px-2.5 py-1 rounded-md select-none text-left",
+          "transition-colors text-muted-foreground hover:bg-muted/20",
+          containsCurrent && !expanded && "text-foreground"
+        )}
+        data-testid={`pipe-group-${pipeName}`}
+        aria-expanded={expanded}
+      >
+        {expanded ? (
+          <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground/70" aria-hidden />
+        ) : (
+          <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground/70" aria-hidden />
+        )}
+        <span
+          className={cn(
+            "truncate flex-1 text-xs",
+            anyUnread ? "font-medium text-foreground" : "font-normal text-muted-foreground"
+          )}
+        >
+          {pipeName}
+        </span>
+        <span className="ml-1 shrink-0 flex items-center gap-1.5">
+          {anyLive ? (
+            <LiveSignal />
+          ) : anyUnread ? (
+            <span className="h-1.5 w-1.5 rounded-full bg-foreground/70" aria-hidden />
+          ) : null}
+          <span className="text-[10px] tabular-nums text-muted-foreground/60" aria-label={`${runs.length} runs`}>
+            {runs.length}
+          </span>
+        </span>
+      </button>
+      <div
+        className={cn(
+          "grid overflow-hidden transition-[grid-template-rows] duration-200 ease-in-out",
+          expanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
+        )}
+      >
+        <div className="overflow-hidden">
+          {/* Left guide rail communicates the runs belong to the pipe above. */}
+          <div className="ml-3 border-l border-border/40 pl-1 flex flex-col">
+            {runs.map((r) => (
+              <SidebarChatRow
+                key={r.id}
+                session={r}
+                isCurrent={r.id === currentId}
+                displayTitle={runLabel(r, pipeName)}
+                tone="subtle"
+                queuedCount={queueDepths.get(r.id) ?? 0}
+                onSelect={onSelect}
+                onArchive={onArchive}
+                onUnarchive={onUnarchive}
+                onDeleteRequest={onDeleteRequest}
+                onTogglePin={onTogglePin}
+                onRenameRequest={onRenameRequest}
+                openConversationMenuId={openConversationMenuId}
+                setOpenConversationMenuId={setOpenConversationMenuId}
+              />
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 interface ChatRowProps {
   session: SessionRecord;
   isCurrent: boolean;
   disableHover?: boolean;
+  /** Override for the rendered label. Used by pipe-run group rows to show a
+   *  terse `#29` instead of the redundant `pipename #29` under the header. */
+  displayTitle?: string;
   tone?: "default" | "subtle";
   queuedCount: number;
   onSelect: (id: string) => void;
@@ -1538,6 +1689,7 @@ export function SidebarChatRow({
   session,
   isCurrent,
   disableHover = false,
+  displayTitle,
   tone = "default",
   queuedCount,
   onSelect,
@@ -1600,7 +1752,7 @@ export function SidebarChatRow({
                 : "text-muted-foreground"
           )}
         >
-          {session.streamingTitle || (isConversationHistorySyncPrompt(session.title) ? undefined : session.title) || "untitled"}
+          {session.streamingTitle || displayTitle || (isConversationHistorySyncPrompt(session.title) ? undefined : session.title) || "untitled"}
         </span>
         <span className="ml-1 h-4 w-10 shrink-0 relative flex items-center justify-end">
           <span
