@@ -1113,9 +1113,9 @@ export function PipesSection() {
     !!(p.config.trigger?.events?.length) ||
     !!(p.config.trigger?.custom?.length);
   const isScheduledPipe = (p: PipeStatus) =>
-    !!p.config.schedule && p.config.schedule !== "manual" && !isTriggeredPipe(p);
+    pipeHasSchedule(p.config) && !isTriggeredPipe(p);
   const isManualPipe = (p: PipeStatus) =>
-    (!p.config.schedule || p.config.schedule === "manual") && !isTriggeredPipe(p);
+    !pipeHasSchedule(p.config) && !isTriggeredPipe(p);
 
   // Single create-pipe entry point shared by the create box and the example
   // chips. Marks the generation attempt (so standalone-chat can fire
