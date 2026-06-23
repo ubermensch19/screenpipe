@@ -59,6 +59,13 @@ describe("describeScheduleConfig (parity with Rust describe_schedule_config)", (
     ).toBe("every 2 weeks on Mon, Wed at 9:30 AM");
   });
 
+  test("weeks config missing days_of_week does not throw (API omits empty arrays)", () => {
+    // The backend skips serializing empty Vecs, so days_of_week can be absent.
+    const partial = { frequency: "weeks", interval: 1, at_hour: 9, at_minute: 0 } as unknown as ScheduleConfig;
+    expect(() => describeScheduleConfig(partial)).not.toThrow();
+    expect(describeScheduleConfig(partial)).toContain("9:00 AM");
+  });
+
   test("monthly with timezone suffix", () => {
     expect(
       describeScheduleConfig(

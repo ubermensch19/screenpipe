@@ -147,8 +147,9 @@ export function describeScheduleConfig(cfg: ScheduleConfig): string {
       base = n === 1 ? `every day at ${time}` : `every ${n} days at ${time}`;
       break;
     case "weeks": {
-      const days = humanizeWeekdays(cfg.days_of_week);
-      if (cfg.days_of_week.length === 7 && n === 1) base = `every day at ${time}`;
+      const dows = cfg.days_of_week ?? [];
+      const days = humanizeWeekdays(dows);
+      if (dows.length === 7 && n === 1) base = `every day at ${time}`;
       else if (n === 1) base = `weekly on ${days} at ${time}`;
       else base = `every ${n} weeks on ${days} at ${time}`;
       break;

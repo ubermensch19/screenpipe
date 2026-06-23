@@ -56,9 +56,13 @@ export function PipeScheduleBuilder({
     () => scheduleStringToConfig(currentScheduleString),
     [currentScheduleString]
   );
-  const [cfg, setCfg] = useState<ScheduleConfig>(
-    () => current ?? reverseParsed ?? defaultScheduleConfig()
-  );
+  // The API omits empty fields (serde `skip_serializing_if`), e.g. an hours
+  // config has no `days_of_week`. Merge over defaults so every field is always
+  // present — otherwise switching to Weeks reads `.length` of undefined.
+  const [cfg, setCfg] = useState<ScheduleConfig>(() => ({
+    ...defaultScheduleConfig(),
+    ...(current ?? reverseParsed ?? {}),
+  }));
   const [manual, setManual] = useState<boolean>(() => !current && !reverseParsed);
   const [preview, setPreview] = useState<{ summary: string; next: string[] } | null>(null);
 
