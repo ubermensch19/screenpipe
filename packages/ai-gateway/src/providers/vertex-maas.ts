@@ -17,7 +17,8 @@
 
 import { AIProvider } from './base';
 import { Message, RequestBody, ResponseFormat, ToolCall } from '../types';
-import { VertexAIProvider } from './vertex';
+import { VertexAIProvider, WifConfig } from './vertex';
+import { dropNamelessToolCalls } from '../utils/message-sanitize';
 
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 1000;
@@ -269,8 +270,8 @@ export class VertexMaasProvider implements AIProvider {
 	private vertexProvider: VertexAIProvider;
 	private projectId: string;
 
-	constructor(serviceAccountJson: string, projectId: string) {
-		this.vertexProvider = new VertexAIProvider(serviceAccountJson, projectId);
+	constructor(serviceAccountJson: string, projectId: string, wif?: WifConfig) {
+		this.vertexProvider = new VertexAIProvider(serviceAccountJson, projectId, undefined, wif);
 		this.projectId = projectId;
 	}
 
@@ -370,6 +371,11 @@ export class VertexMaasProvider implements AIProvider {
 	}
 
 	formatMessages(messages: Message[]): any[] {
+		// Drop tool calls with no function name (and their orphaned tool results)
+		// up front — Vertex MaaS otherwise 400s with "Expected a function 'name'
+		// in a(n) 'assistant' message to be populated" (SCREENPIPE-AI-PROXY-24).
+		messages = dropNamelessToolCalls(messages);
+
 		// Repair assistant tool_calls (and their matching tool result) that lack
 		// an id before anything else, so Vertex doesn't 400 with "Expected the
 		// 'id' of a(n) 'assistant' 'tool_calls' array element to be populated".
