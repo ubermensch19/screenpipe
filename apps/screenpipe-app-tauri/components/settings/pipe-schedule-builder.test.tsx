@@ -112,6 +112,13 @@ describe("PipeScheduleBuilder", () => {
     expect(onSave).toHaveBeenCalledWith(null);
   });
 
+  test("toggling 'run on a schedule' off saves manual (null)", () => {
+    const { onSave } = renderBuilder(cfg({ frequency: "days", at_hour: 9 }));
+    fireEvent.click(screen.getByRole("switch")); // turn schedule off
+    fireEvent.click(saveButton());
+    expect(onSave).toHaveBeenCalledWith(null);
+  });
+
   test("cancel calls onCancel", () => {
     const { onCancel } = renderBuilder(cfg({ frequency: "days" }));
     fireEvent.click(screen.getByRole("button", { name: "cancel" }));

@@ -15,6 +15,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import {
   describeScheduleConfig,
@@ -27,8 +28,6 @@ import {
   type Frequency,
   type ScheduleConfig,
 } from "@/lib/utils/schedule-builder";
-
-const MANUAL = "manual" as const;
 
 /** Convert an RFC3339 string to a value for `<input type="date">` (YYYY-MM-DD). */
 function isoToDateInput(iso: string | null): string {
@@ -117,36 +116,34 @@ export function PipeScheduleBuilder({
 
   return (
     <div className="w-[320px] space-y-3 p-1 text-xs">
-      {/* Repeat */}
+      {/* Run on a schedule toggle — off = manual (runs only on demand) */}
       <div className="flex items-center justify-between gap-2">
-        <Label className="text-xs">repeat</Label>
-        <Select
-          value={manual ? MANUAL : cfg.frequency}
-          onValueChange={(v) => {
-            if (v === MANUAL) {
-              setManual(true);
-              return;
-            }
-            setManual(false);
-            update({ frequency: v as Frequency });
-          }}
-        >
-          <SelectTrigger className="h-8 w-[170px] text-xs">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={MANUAL}>don&apos;t run</SelectItem>
-            {FREQUENCY_OPTIONS.map((f) => (
-              <SelectItem key={f.value} value={f.value}>
-                every {f.label.replace(/s$/, "")}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <Label className="text-xs">run on a schedule</Label>
+        <Switch checked={!manual} onCheckedChange={(on) => setManual(!on)} />
       </div>
 
       {!manual && (
         <>
+          {/* Repeat */}
+          <div className="flex items-center justify-between gap-2">
+            <Label className="text-xs">repeat</Label>
+            <Select
+              value={cfg.frequency}
+              onValueChange={(v) => update({ frequency: v as Frequency })}
+            >
+              <SelectTrigger className="h-8 w-[170px] text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {FREQUENCY_OPTIONS.map((f) => (
+                  <SelectItem key={f.value} value={f.value}>
+                    every {f.label.replace(/s$/, "")}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
           {/* Every N <unit> */}
           <div className="flex items-center justify-between gap-2">
             <Label className="text-xs">every</Label>
