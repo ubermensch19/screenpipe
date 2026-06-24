@@ -43,6 +43,11 @@ import {
   pipeConnectionInstanceName,
   pipeConnectionLookupKey,
 } from "@/lib/pipe-connections";
+import {
+  type ConnectionRecommendation,
+  recommendConnections,
+  recommendationCacheKey,
+} from "@/lib/utils/recommend-connections";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -586,6 +591,143 @@ interface PipeStatus {
   source_slug?: string;
   installed_version?: number;
   locally_modified?: boolean;
+}
+
+/**
+ * AI-recommended connections for a pipe (issue #4497). Opt-in: the user clicks
+ * "recommend" and we ask the AI which connections would improve this pipe's
+ * output, then show them as add-able chips. Tapping a chip = approval and reuses
+ * the same add flow as the picker. Results are cached by a key derived from the
+ * prompt + current connections, so editing the pipe surfaces a "refresh" hint
+ * and recomputes against the new prompt rather than showing stale suggestions.
+ */
+function PipeConnectionSuggestions({
+  pipe,
+  onApprove,
+}: {
+  pipe: PipeStatus;
+  onApprove: (connectionKey: string) => void;
+}) {
+  const currentConnections = pipe.config.connections || [];
+  const promptBody = pipe.prompt_body || "";
+  const cacheKey = recommendationCacheKey(promptBody, currentConnections);
+
+  const [state, setState] = useState<{
+    key: string;
+    loading: boolean;
+    ran: boolean;
+    items: ConnectionRecommendation[];
+    dismissed: string[];
+    error?: string;
+  }>({ key: cacheKey, loading: false, ran: false, items: [], dismissed: [] });
+
+  // The pipe's prompt (or its connections) changed since we last ran — the
+  // cached suggestions are stale.
+  const stale = state.ran && state.key !== cacheKey;
+
+  const run = useCallback(async () => {
+    setState((s) => ({ ...s, loading: true, error: undefined, key: cacheKey }));
+    try {
+      const items = await recommendConnections(
+        pipe.config.name,
+        promptBody,
+        currentConnections
+      );
+      setState({ key: cacheKey, loading: false, ran: true, items, dismissed: [] });
+      posthog.capture("pipe_connections_recommended", { count: items.length });
+    } catch {
+      setState((s) => ({
+        ...s,
+        loading: false,
+        ran: true,
+        items: [],
+        error: "couldn't get suggestions",
+      }));
+    }
+  }, [cacheKey, pipe.config.name, promptBody, currentConnections]);
+
+  const visible = (stale ? [] : state.items).filter(
+    (r) => !state.dismissed.includes(r.id) && !currentConnections.includes(r.id)
+  );
+
+  const buttonLabel = state.loading
+    ? "thinking…"
+    : stale
+      ? "refresh"
+      : state.ran
+        ? "refresh"
+        : "recommend";
+
+  return (
+    <>
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={run}
+        disabled={state.loading}
+        title="ask AI which connections would improve this pipe's output"
+        className="h-8 text-xs font-mono uppercase tracking-wider px-3 gap-1.5 text-muted-foreground hover:text-foreground"
+        data-testid="pipe-connection-recommend"
+      >
+        {state.loading ? (
+          <Loader2 className="h-3 w-3 animate-spin" />
+        ) : (
+          <Sparkles className="h-3 w-3" />
+        )}
+        {buttonLabel}
+      </Button>
+
+      {(visible.length > 0 ||
+        (state.ran && !state.loading && !stale) ||
+        state.error) && (
+        <div className="basis-full mt-1 flex flex-wrap items-center gap-2">
+          {visible.length > 0 ? (
+            <>
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground/70">
+                suggested
+              </span>
+              {visible.map((rec) => (
+                <div
+                  key={rec.id}
+                  title={rec.reason}
+                  className="flex items-center gap-2 border border-dashed border-foreground/25 bg-muted/30 px-3 py-1.5 text-xs font-mono"
+                >
+                  <Sparkles className="h-3 w-3 text-muted-foreground" />
+                  <span>{rec.name}</span>
+                  <span className="text-[10px] normal-case text-muted-foreground hidden sm:inline">
+                    {rec.reason}
+                  </span>
+                  <button
+                    className="text-muted-foreground hover:text-foreground transition-colors duration-150"
+                    title="add this connection"
+                    onClick={() => {
+                      onApprove(rec.id);
+                      setState((s) => ({ ...s, dismissed: [...s.dismissed, rec.id] }));
+                    }}
+                  >
+                    <Plus className="h-3 w-3" />
+                  </button>
+                  <button
+                    className="text-muted-foreground/60 hover:text-foreground transition-colors duration-150"
+                    title="dismiss"
+                    onClick={() =>
+                      setState((s) => ({ ...s, dismissed: [...s.dismissed, rec.id] }))
+                    }
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </>
+          ) : state.error ? (
+            <span className="text-xs text-muted-foreground">{state.error}</span>
+          ) : (
+            <span className="text-xs text-muted-foreground">no suggestions</span>
+          )}
+        </div>
+      )}
+    </>
+  );
 }
 
 interface PipeRunLog {
@@ -2669,6 +2811,16 @@ export function PipesSection() {
                                 window.dispatchEvent(new CustomEvent("open-settings", {
                                   detail: { section: "connections" },
                                 }));
+                              }}
+                            />
+                            <PipeConnectionSuggestions
+                              pipe={pipe}
+                              onApprove={(key) => {
+                                const existing = pipe.config.connections || [];
+                                if (existing.includes(key)) return;
+                                const updated = [...existing, key];
+                                setPipes((prev) => prev.map((p) => p.config.name === pipe.config.name ? { ...p, config: { ...p.config, connections: updated } } : p));
+                                fetch(`${apiBase}/pipes/${pipe.config.name}/config`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ connections: updated }) }).then(() => fetchPipes());
                               }}
                             />
                           </div>
