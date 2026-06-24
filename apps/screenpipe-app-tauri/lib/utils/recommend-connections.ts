@@ -55,14 +55,6 @@ export function simpleHash(input: string): string {
   return (h >>> 0).toString(36);
 }
 
-/** Cache key: changes whenever the prompt or the current connections change. */
-export function recommendationCacheKey(
-  promptBody: string,
-  currentConnections: string[]
-): string {
-  return `${simpleHash(promptBody)}:${[...currentConnections].sort().join(",")}`;
-}
-
 async function fetchPromptBody(pipeName: string): Promise<string> {
   try {
     const res = await localFetch(`/pipes/${encodeURIComponent(pipeName)}`);

@@ -46,7 +46,7 @@ import {
 import {
   type ConnectionRecommendation,
   recommendConnections,
-  recommendationCacheKey,
+  simpleHash,
 } from "@/lib/utils/recommend-connections";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -593,13 +593,19 @@ interface PipeStatus {
   locally_modified?: boolean;
 }
 
+// Session cache of recommendations, keyed by `${pipeName}::${promptHash}`. Keeps
+// suggestions across card collapse/expand and avoids re-asking the AI for the
+// same prompt. Editing the prompt changes the hash → a fresh fetch.
+const pipeConnectionRecCache = new Map<string, ConnectionRecommendation[]>();
+
 /**
- * AI-recommended connections for a pipe (issue #4497). Opt-in: the user clicks
- * "recommend" and we ask the AI which connections would improve this pipe's
- * output, then show them as add-able chips. Tapping a chip = approval and reuses
- * the same add flow as the picker. Results are cached by a key derived from the
- * prompt + current connections, so editing the pipe surfaces a "refresh" hint
- * and recomputes against the new prompt rather than showing stale suggestions.
+ * AI-recommended connections for a pipe (issue #4497). For pipes that have no
+ * connections yet — where suggestions help most — it asks the AI automatically
+ * when the config opens; pipes that already have connections get an opt-in
+ * "recommend" button instead. Either way the result is a list of add-able chips:
+ * tapping one approves it and reuses the picker's add flow. Editing the pipe's
+ * prompt invalidates the suggestions (keyed by prompt hash) and offers a refresh
+ * rather than showing stale results.
  */
 function PipeConnectionSuggestions({
   pipe,
@@ -610,41 +616,65 @@ function PipeConnectionSuggestions({
 }) {
   const currentConnections = pipe.config.connections || [];
   const promptBody = pipe.prompt_body || "";
-  const cacheKey = recommendationCacheKey(promptBody, currentConnections);
+  const promptHash = simpleHash(promptBody);
+  const cacheId = `${pipe.config.name}::${promptHash}`;
 
   const [state, setState] = useState<{
-    key: string;
+    promptHash: string;
     loading: boolean;
     ran: boolean;
+    manual: boolean;
     items: ConnectionRecommendation[];
     dismissed: string[];
     error?: string;
-  }>({ key: cacheKey, loading: false, ran: false, items: [], dismissed: [] });
+  }>({ promptHash, loading: false, ran: false, manual: false, items: [], dismissed: [] });
 
-  // The pipe's prompt (or its connections) changed since we last ran — the
-  // cached suggestions are stale.
-  const stale = state.ran && state.key !== cacheKey;
+  // Only the prompt changing makes suggestions stale — adding/removing
+  // connections (e.g. approving a suggestion) should not blow away the list.
+  const stale = state.ran && state.promptHash !== promptHash;
 
-  const run = useCallback(async () => {
-    setState((s) => ({ ...s, loading: true, error: undefined, key: cacheKey }));
-    try {
-      const items = await recommendConnections(
-        pipe.config.name,
-        promptBody,
-        currentConnections
-      );
-      setState({ key: cacheKey, loading: false, ran: true, items, dismissed: [] });
-      posthog.capture("pipe_connections_recommended", { count: items.length });
-    } catch {
-      setState((s) => ({
-        ...s,
-        loading: false,
-        ran: true,
-        items: [],
-        error: "couldn't get suggestions",
-      }));
+  const run = useCallback(
+    async (manual: boolean) => {
+      setState((s) => ({ ...s, loading: true, manual, error: undefined, promptHash }));
+      try {
+        const items = await recommendConnections(
+          pipe.config.name,
+          promptBody,
+          currentConnections
+        );
+        pipeConnectionRecCache.set(cacheId, items);
+        setState({ promptHash, loading: false, ran: true, manual, items, dismissed: [] });
+        posthog.capture("pipe_connections_recommended", {
+          count: items.length,
+          auto: !manual,
+        });
+      } catch {
+        setState((s) => ({
+          ...s,
+          loading: false,
+          ran: true,
+          manual,
+          items: [],
+          error: manual ? "couldn't get suggestions" : undefined,
+        }));
+      }
+    },
+    [cacheId, promptHash, pipe.config.name, promptBody, currentConnections]
+  );
+
+  // Hydrate from the session cache, or proactively fetch for pipes that have no
+  // connections yet. Re-runs when the prompt hash changes (cacheId).
+  useEffect(() => {
+    const cached = pipeConnectionRecCache.get(cacheId);
+    if (cached) {
+      setState({ promptHash, loading: false, ran: true, manual: false, items: cached, dismissed: [] });
+      return;
     }
-  }, [cacheKey, pipe.config.name, promptBody, currentConnections]);
+    if (currentConnections.length === 0) {
+      run(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cacheId]);
 
   const visible = (stale ? [] : state.items).filter(
     (r) => !state.dismissed.includes(r.id) && !currentConnections.includes(r.id)
@@ -652,18 +682,16 @@ function PipeConnectionSuggestions({
 
   const buttonLabel = state.loading
     ? "thinking…"
-    : stale
+    : stale || state.ran
       ? "refresh"
-      : state.ran
-        ? "refresh"
-        : "recommend";
+      : "recommend";
 
   return (
     <>
       <Button
         variant="ghost"
         size="sm"
-        onClick={run}
+        onClick={() => run(true)}
         disabled={state.loading}
         title="ask AI which connections would improve this pipe's output"
         className="h-8 text-xs font-mono uppercase tracking-wider px-3 gap-1.5 text-muted-foreground hover:text-foreground"
@@ -678,7 +706,7 @@ function PipeConnectionSuggestions({
       </Button>
 
       {(visible.length > 0 ||
-        (state.ran && !state.loading && !stale) ||
+        (state.manual && state.ran && !state.loading && !stale) ||
         state.error) && (
         <div className="basis-full mt-1 flex flex-wrap items-center gap-2">
           {visible.length > 0 ? (
