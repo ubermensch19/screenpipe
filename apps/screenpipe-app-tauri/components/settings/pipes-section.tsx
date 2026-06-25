@@ -681,7 +681,7 @@ function PipeConnectionSuggestions({
   );
 
   const buttonLabel = state.loading
-    ? "thinking…"
+    ? "finding connections…"
     : stale || state.ran
       ? "refresh"
       : "recommend";
