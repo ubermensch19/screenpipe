@@ -150,11 +150,12 @@ describe("recommendConnections", () => {
 
     // "calendar" in the prompt matches Google Calendar's name/category.
     expect(recs.map((r) => r.id)).toContain("google-calendar");
-    // The heuristic reason explains how it helps, derived from the connection's
-    // description (its first sentence) — not a generic "mentioned in prompt".
-    expect(recs.find((r) => r.id === "google-calendar")?.reason).toBe(
-      "Read-only access to Google Calendar events via OAuth."
-    );
+    // The heuristic reason ties the matched prompt keyword to how the connection
+    // enhances this pipe — not a generic "mentioned in prompt".
+    const reason = recs.find((r) => r.id === "google-calendar")?.reason ?? "";
+    expect(reason).toContain('"calendar"');
+    expect(reason).toContain("Google Calendar");
+    expect(reason).toMatch(/improve this pipe's results/);
   });
 
   it("falls back to the heuristic when the model returns an empty array", async () => {

@@ -118,7 +118,10 @@ function buildMessages(
     `Automation instructions:\n"""\n${promptBody.slice(0, MAX_PROMPT_CHARS)}\n"""\n\n` +
     `Available connections (id — name: description):\n${lines}\n\n` +
     `Return up to ${MAX_RECOMMENDATIONS} as a JSON array of objects: ` +
-    `[{"id":"<exact id from the list above>","reason":"<max 8 words on why it improves the output>"}]. ` +
+    `[{"id":"<exact id from the list above>","reason":"<a short phrase, max ~14 words, ` +
+    `explaining concretely how connecting it would enhance THIS pipe's results>"}]. ` +
+    `The reason is shown to the user on hover, so make it specific to this pipe — ` +
+    `e.g. "pulls your meeting times so the digest knows what's scheduled". ` +
     `Only include connections that genuinely help. If none are clearly relevant, return [].`;
 
   return [
@@ -180,19 +183,30 @@ function heuristicRecommend(
   return catalog
     .map((c) => {
       let score = 0;
+      // The prompt word that made us pick this connection — used to explain, in
+      // the tooltip, how it would enhance the pipe.
+      let matchedKeyword: string | null = null;
       // Strong signal: the connection's own name/id/category named in the prompt.
       const nameTokens = `${c.name} ${c.id} ${c.category}`
         .toLowerCase()
         .split(/[^a-z0-9]+/)
         .filter((t) => t.length >= 3);
-      for (const t of new Set(nameTokens)) if (promptTokens.has(t)) score += 3;
+      for (const t of new Set(nameTokens))
+        if (promptTokens.has(t)) {
+          score += 3;
+          if (!matchedKeyword) matchedKeyword = t;
+        }
       // Weak signal: description words overlapping the prompt.
       const descTokens = c.description
         .toLowerCase()
         .split(/[^a-z0-9]+/)
         .filter((t) => t.length >= 4);
-      for (const t of new Set(descTokens)) if (promptTokens.has(t)) score += 1;
-      return { c, score };
+      for (const t of new Set(descTokens))
+        if (promptTokens.has(t)) {
+          score += 1;
+          if (!matchedKeyword) matchedKeyword = t;
+        }
+      return { c, score, matchedKeyword };
     })
     .filter((s) => s.score > 0)
     .sort((a, b) => {
@@ -204,7 +218,9 @@ function heuristicRecommend(
     .map((s) => ({
       id: s.c.id,
       name: s.c.name,
-      reason: connectionHelpReason(s.c),
+      reason: s.matchedKeyword
+        ? `your prompt mentions "${s.matchedKeyword}" — ${s.c.name} can supply that to improve this pipe's results`
+        : connectionHelpReason(s.c),
       connected: s.c.connected,
     }));
 }
