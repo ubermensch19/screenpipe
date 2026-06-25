@@ -48,6 +48,8 @@ import {
   type ConnectionRecommendation,
   recommendConnections,
   simpleHash,
+  loadStoredRecommendations,
+  storeRecommendations,
 } from "@/lib/utils/recommend-connections";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -594,22 +596,22 @@ interface PipeStatus {
   locally_modified?: boolean;
 }
 
-// Session cache of recommendations, keyed by `${pipeName}::${promptHash}`. Keeps
-// suggestions across card collapse/expand and avoids re-asking the AI for the
-// same prompt. Editing the prompt changes the hash → a fresh fetch.
+// In-session cache of recommendations, keyed by `${pipeName}::${promptHash}`,
+// backed by localStorage (see recommend-connections.ts) so suggestions survive
+// app restarts. A pipe is (re)recommended only when nothing is stored for the
+// current prompt — i.e. the first time, or after the prompt changes.
 const pipeConnectionRecCache = new Map<string, ConnectionRecommendation[]>();
-// Pipe names that have produced recommendations at least once this session. Once
-// a pipe has recommendations, editing its prompt auto-recomputes them (no manual
-// refresh) — see the hydrate effect.
-const pipeConnectionRecEverRan = new Set<string>();
+// cacheIds with an in-flight request — guards against duplicate AI calls (React
+// StrictMode double-invokes effects in dev; two mounts of the same pipe).
+const pipeConnectionRecInFlight = new Set<string>();
 
 /**
- * AI-recommended connections for a pipe (issue #4497). For pipes that have no
- * connections yet — where suggestions help most — it asks the AI automatically
- * when the config opens; pipes that already have connections get an opt-in
- * "recommend" button instead. Either way the result is a list of add-able chips:
- * tapping one approves it and reuses the picker's add flow. Editing the pipe's
- * prompt (which changes the cache key) recomputes the suggestions automatically.
+ * AI-recommended connections for a pipe (issue #4497). The AI is asked which
+ * connections would improve the pipe ONLY when there's no recommendation stored
+ * for the current prompt — i.e. the first time the pipe is seen, or after its
+ * prompt changes. Results are persisted (localStorage, tagged with the prompt
+ * hash), so opening the pipe again does NOT re-run it. Suggestions render as
+ * add-able chips; tapping one approves it via the picker's add flow.
  */
 function PipeConnectionSuggestions({
   pipe,
@@ -624,58 +626,48 @@ function PipeConnectionSuggestions({
   const cacheId = `${pipe.config.name}::${promptHash}`;
 
   const [state, setState] = useState<{
-    promptHash: string;
     loading: boolean;
-    ran: boolean;
-    manual: boolean;
     items: ConnectionRecommendation[];
     dismissed: string[];
-    error?: string;
-  }>({ promptHash, loading: false, ran: false, manual: false, items: [], dismissed: [] });
+  }>({ loading: false, items: [], dismissed: [] });
 
-  const run = useCallback(
-    async (manual: boolean) => {
-      pipeConnectionRecEverRan.add(pipe.config.name);
-      setState((s) => ({ ...s, loading: true, manual, error: undefined, promptHash }));
-      try {
-        const items = await recommendConnections(
-          pipe.config.name,
-          promptBody,
-          currentConnections
-        );
-        pipeConnectionRecCache.set(cacheId, items);
-        setState({ promptHash, loading: false, ran: true, manual, items, dismissed: [] });
-        posthog.capture("pipe_connections_recommended", {
-          count: items.length,
-          auto: !manual,
-        });
-      } catch {
-        setState((s) => ({
-          ...s,
-          loading: false,
-          ran: true,
-          manual,
-          items: [],
-          error: manual ? "couldn't get suggestions" : undefined,
-        }));
-      }
-    },
-    [cacheId, promptHash, pipe.config.name, promptBody, currentConnections]
-  );
+  const run = useCallback(async () => {
+    pipeConnectionRecInFlight.add(cacheId);
+    setState((s) => ({ ...s, loading: true }));
+    try {
+      const items = await recommendConnections(
+        pipe.config.name,
+        promptBody,
+        currentConnections
+      );
+      pipeConnectionRecCache.set(cacheId, items);
+      storeRecommendations(pipe.config.name, promptHash, items);
+      setState({ loading: false, items, dismissed: [] });
+      posthog.capture("pipe_connections_recommended", { count: items.length });
+    } catch {
+      // Store nothing on failure so it retries the next time the pipe is opened.
+      setState({ loading: false, items: [], dismissed: [] });
+    } finally {
+      pipeConnectionRecInFlight.delete(cacheId);
+    }
+  }, [cacheId, promptHash, pipe.config.name, promptBody, currentConnections]);
 
-  // Hydrate from the session cache, or (re)compute. Runs when the prompt hash
-  // changes (cacheId), so editing the prompt auto-recomputes for pipes that have
-  // no connections yet OR have already produced recommendations — no manual
-  // refresh button needed.
+  // Run only on first-time (nothing stored) or prompt change (the prompt hash —
+  // part of cacheId — no longer matches what's stored). Otherwise hydrate the
+  // existing recommendation without re-asking the AI.
   useEffect(() => {
     const cached = pipeConnectionRecCache.get(cacheId);
     if (cached) {
-      setState({ promptHash, loading: false, ran: true, manual: false, items: cached, dismissed: [] });
+      setState({ loading: false, items: cached, dismissed: [] });
       return;
     }
-    if (currentConnections.length === 0 || pipeConnectionRecEverRan.has(pipe.config.name)) {
-      run(false);
+    const stored = loadStoredRecommendations(pipe.config.name, promptHash);
+    if (stored) {
+      pipeConnectionRecCache.set(cacheId, stored);
+      setState({ loading: false, items: stored, dismissed: [] });
+      return;
     }
+    if (!pipeConnectionRecInFlight.has(cacheId)) run();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cacheId]);
 
@@ -683,76 +675,49 @@ function PipeConnectionSuggestions({
     (r) => !state.dismissed.includes(r.id) && !currentConnections.includes(r.id)
   );
 
-  // The button is only the loader (while recommending) or the initial opt-in
-  // trigger for pipes that already have connections. Once a run has produced
-  // results, the chips stand alone — no refresh affordance.
-  const showButton = state.loading || (!state.ran && currentConnections.length > 0);
-
   return (
     <>
-      {showButton && (
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => run(true)}
-          disabled={state.loading}
-          title="ask AI which connections would improve this pipe's output"
-          className="h-8 text-xs font-mono uppercase tracking-wider px-3 gap-1.5 text-muted-foreground hover:text-foreground"
-          data-testid="pipe-connection-recommend"
-        >
-          {state.loading ? (
-            <Loader2 className="h-3 w-3 animate-spin" />
-          ) : (
-            <Sparkles className="h-3 w-3" />
-          )}
-          {state.loading ? "recommending connections…" : "recommend"}
-        </Button>
+      {state.loading && (
+        <span className="inline-flex items-center gap-1.5 h-8 px-3 text-xs font-mono uppercase tracking-wider text-muted-foreground">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          recommending connections…
+        </span>
       )}
 
-      {(visible.length > 0 ||
-        (state.manual && state.ran && !state.loading) ||
-        state.error) && (
+      {visible.length > 0 && (
         <div className="basis-full mt-1 flex flex-wrap items-center gap-2">
-          {visible.length > 0 ? (
-            <>
-              <span className="text-[10px] uppercase tracking-wider text-muted-foreground/70">
-                suggested
-              </span>
-              {visible.map((rec) => (
-                <div
-                  key={rec.id}
-                  className="flex items-center gap-2 border border-dashed border-foreground/25 bg-muted/30 px-3 py-1.5 text-xs font-mono"
-                >
-                  <Sparkles className="h-3 w-3 text-muted-foreground" />
-                  <span>{rec.name}</span>
-                  <HelpTooltip text={rec.reason} icon={Info} />
-                  <button
-                    className="text-muted-foreground hover:text-foreground transition-colors duration-150"
-                    title="add this connection"
-                    onClick={() => {
-                      onApprove(rec.id);
-                      setState((s) => ({ ...s, dismissed: [...s.dismissed, rec.id] }));
-                    }}
-                  >
-                    <Plus className="h-3 w-3" />
-                  </button>
-                  <button
-                    className="text-muted-foreground/60 hover:text-foreground transition-colors duration-150"
-                    title="dismiss"
-                    onClick={() =>
-                      setState((s) => ({ ...s, dismissed: [...s.dismissed, rec.id] }))
-                    }
-                  >
-                    ×
-                  </button>
-                </div>
-              ))}
-            </>
-          ) : state.error ? (
-            <span className="text-xs text-muted-foreground">{state.error}</span>
-          ) : (
-            <span className="text-xs text-muted-foreground">no suggestions</span>
-          )}
+          <span className="text-[10px] uppercase tracking-wider text-muted-foreground/70">
+            suggested
+          </span>
+          {visible.map((rec) => (
+            <div
+              key={rec.id}
+              className="flex items-center gap-2 border border-dashed border-foreground/25 bg-muted/30 px-3 py-1.5 text-xs font-mono"
+            >
+              <Sparkles className="h-3 w-3 text-muted-foreground" />
+              <span>{rec.name}</span>
+              <HelpTooltip text={rec.reason} icon={Info} />
+              <button
+                className="text-muted-foreground hover:text-foreground transition-colors duration-150"
+                title="add this connection"
+                onClick={() => {
+                  onApprove(rec.id);
+                  setState((s) => ({ ...s, dismissed: [...s.dismissed, rec.id] }));
+                }}
+              >
+                <Plus className="h-3 w-3" />
+              </button>
+              <button
+                className="text-muted-foreground/60 hover:text-foreground transition-colors duration-150"
+                title="dismiss"
+                onClick={() =>
+                  setState((s) => ({ ...s, dismissed: [...s.dismissed, rec.id] }))
+                }
+              >
+                ×
+              </button>
+            </div>
+          ))}
         </div>
       )}
     </>

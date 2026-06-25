@@ -55,6 +55,44 @@ export function simpleHash(input: string): string {
   return (h >>> 0).toString(36);
 }
 
+// Persist recommendations per pipe, tagged with the prompt hash they were
+// computed for, so they survive app restarts. The pipe is re-recommended only
+// when there's nothing stored (first time) or the prompt changed (hash differs).
+const REC_STORE_PREFIX = "screenpipe:pipe-conn-recs:v1:";
+
+/** Stored recommendations for a pipe, but only if they match `promptHash`. */
+export function loadStoredRecommendations(
+  pipeName: string,
+  promptHash: string
+): ConnectionRecommendation[] | null {
+  try {
+    const raw = localStorage.getItem(REC_STORE_PREFIX + pipeName);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && parsed.hash === promptHash && Array.isArray(parsed.items)) {
+      return parsed.items as ConnectionRecommendation[];
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export function storeRecommendations(
+  pipeName: string,
+  promptHash: string,
+  items: ConnectionRecommendation[]
+): void {
+  try {
+    localStorage.setItem(
+      REC_STORE_PREFIX + pipeName,
+      JSON.stringify({ hash: promptHash, items })
+    );
+  } catch {
+    // localStorage unavailable / quota — recommendations just won't persist.
+  }
+}
+
 async function fetchPromptBody(pipeName: string): Promise<string> {
   try {
     const res = await localFetch(`/pipes/${encodeURIComponent(pipeName)}`);
