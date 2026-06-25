@@ -34,6 +34,7 @@ import {
   AlertCircle,
   Copy,
   Star,
+  Info,
 } from "lucide-react";
 import { usePipeFavorites } from "@/lib/hooks/use-pipe-favorites";
 import {
@@ -597,6 +598,10 @@ interface PipeStatus {
 // suggestions across card collapse/expand and avoids re-asking the AI for the
 // same prompt. Editing the prompt changes the hash → a fresh fetch.
 const pipeConnectionRecCache = new Map<string, ConnectionRecommendation[]>();
+// Pipe names that have produced recommendations at least once this session. Once
+// a pipe has recommendations, editing its prompt auto-recomputes them (no manual
+// refresh) — see the hydrate effect.
+const pipeConnectionRecEverRan = new Set<string>();
 
 /**
  * AI-recommended connections for a pipe (issue #4497). For pipes that have no
@@ -604,8 +609,7 @@ const pipeConnectionRecCache = new Map<string, ConnectionRecommendation[]>();
  * when the config opens; pipes that already have connections get an opt-in
  * "recommend" button instead. Either way the result is a list of add-able chips:
  * tapping one approves it and reuses the picker's add flow. Editing the pipe's
- * prompt invalidates the suggestions (keyed by prompt hash) and offers a refresh
- * rather than showing stale results.
+ * prompt (which changes the cache key) recomputes the suggestions automatically.
  */
 function PipeConnectionSuggestions({
   pipe,
@@ -629,12 +633,9 @@ function PipeConnectionSuggestions({
     error?: string;
   }>({ promptHash, loading: false, ran: false, manual: false, items: [], dismissed: [] });
 
-  // Only the prompt changing makes suggestions stale — adding/removing
-  // connections (e.g. approving a suggestion) should not blow away the list.
-  const stale = state.ran && state.promptHash !== promptHash;
-
   const run = useCallback(
     async (manual: boolean) => {
+      pipeConnectionRecEverRan.add(pipe.config.name);
       setState((s) => ({ ...s, loading: true, manual, error: undefined, promptHash }));
       try {
         const items = await recommendConnections(
@@ -662,51 +663,54 @@ function PipeConnectionSuggestions({
     [cacheId, promptHash, pipe.config.name, promptBody, currentConnections]
   );
 
-  // Hydrate from the session cache, or proactively fetch for pipes that have no
-  // connections yet. Re-runs when the prompt hash changes (cacheId).
+  // Hydrate from the session cache, or (re)compute. Runs when the prompt hash
+  // changes (cacheId), so editing the prompt auto-recomputes for pipes that have
+  // no connections yet OR have already produced recommendations — no manual
+  // refresh button needed.
   useEffect(() => {
     const cached = pipeConnectionRecCache.get(cacheId);
     if (cached) {
       setState({ promptHash, loading: false, ran: true, manual: false, items: cached, dismissed: [] });
       return;
     }
-    if (currentConnections.length === 0) {
+    if (currentConnections.length === 0 || pipeConnectionRecEverRan.has(pipe.config.name)) {
       run(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cacheId]);
 
-  const visible = (stale ? [] : state.items).filter(
+  const visible = state.items.filter(
     (r) => !state.dismissed.includes(r.id) && !currentConnections.includes(r.id)
   );
 
-  const buttonLabel = state.loading
-    ? "finding connections…"
-    : stale || state.ran
-      ? "refresh"
-      : "recommend";
+  // The button is only the loader (while recommending) or the initial opt-in
+  // trigger for pipes that already have connections. Once a run has produced
+  // results, the chips stand alone — no refresh affordance.
+  const showButton = state.loading || (!state.ran && currentConnections.length > 0);
 
   return (
     <>
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={() => run(true)}
-        disabled={state.loading}
-        title="ask AI which connections would improve this pipe's output"
-        className="h-8 text-xs font-mono uppercase tracking-wider px-3 gap-1.5 text-muted-foreground hover:text-foreground"
-        data-testid="pipe-connection-recommend"
-      >
-        {state.loading ? (
-          <Loader2 className="h-3 w-3 animate-spin" />
-        ) : (
-          <Sparkles className="h-3 w-3" />
-        )}
-        {buttonLabel}
-      </Button>
+      {showButton && (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => run(true)}
+          disabled={state.loading}
+          title="ask AI which connections would improve this pipe's output"
+          className="h-8 text-xs font-mono uppercase tracking-wider px-3 gap-1.5 text-muted-foreground hover:text-foreground"
+          data-testid="pipe-connection-recommend"
+        >
+          {state.loading ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            <Sparkles className="h-3 w-3" />
+          )}
+          {state.loading ? "recommending connections…" : "recommend"}
+        </Button>
+      )}
 
       {(visible.length > 0 ||
-        (state.manual && state.ran && !state.loading && !stale) ||
+        (state.manual && state.ran && !state.loading) ||
         state.error) && (
         <div className="basis-full mt-1 flex flex-wrap items-center gap-2">
           {visible.length > 0 ? (
@@ -717,14 +721,11 @@ function PipeConnectionSuggestions({
               {visible.map((rec) => (
                 <div
                   key={rec.id}
-                  title={rec.reason}
                   className="flex items-center gap-2 border border-dashed border-foreground/25 bg-muted/30 px-3 py-1.5 text-xs font-mono"
                 >
                   <Sparkles className="h-3 w-3 text-muted-foreground" />
                   <span>{rec.name}</span>
-                  <span className="text-[10px] normal-case text-muted-foreground hidden sm:inline">
-                    {rec.reason}
-                  </span>
+                  <HelpTooltip text={rec.reason} icon={Info} />
                   <button
                     className="text-muted-foreground hover:text-foreground transition-colors duration-150"
                     title="add this connection"

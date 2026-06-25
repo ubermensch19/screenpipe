@@ -4,10 +4,16 @@
 
 "use client";
 
-import { HelpCircle } from "lucide-react";
+import { HelpCircle, type LucideIcon } from "lucide-react";
 import { useState, useRef, useEffect, useCallback } from "react";
 
-export function HelpTooltip({ text }: { text: string }) {
+export function HelpTooltip({
+	text,
+	icon: Icon = HelpCircle,
+}: {
+	text: string;
+	icon?: LucideIcon;
+}) {
 	const [open, setOpen] = useState(false);
 	const ref = useRef<HTMLSpanElement>(null);
 
@@ -24,7 +30,7 @@ export function HelpTooltip({ text }: { text: string }) {
 
 	return (
 		<span ref={ref} className="relative inline-flex">
-			<HelpCircle
+			<Icon
 				className="h-3.5 w-3.5 text-muted-foreground/50 hover:text-muted-foreground cursor-default shrink-0 transition-colors duration-150"
 				onMouseEnter={() => setOpen(true)}
 				onMouseLeave={() => setOpen(false)}
