@@ -144,6 +144,23 @@ function parseRecommendationArray(content: string): { id: string; reason: string
 }
 
 /**
+ * A short "how it helps" line for the heuristic fallback (which has no AI
+ * explanation). Use the connection's own description — its first sentence
+ * describes what data/actions it gives the pipe — falling back to a generic
+ * phrase when there's no description.
+ */
+function connectionHelpReason(c: CatalogEntry): string {
+  const clean = c.description.replace(/\s+/g, " ").trim();
+  if (clean) {
+    const firstSentence = (clean.match(/^(.*?\.)(?:\s|$)/)?.[1] ?? clean).trim();
+    return firstSentence.length <= 140
+      ? firstSentence
+      : `${firstSentence.slice(0, 137).trimEnd()}…`;
+  }
+  return `lets this pipe use ${c.name}`;
+}
+
+/**
  * Local fallback: score each catalog connection by keyword overlap with the
  * pipe's prompt + name. Used when the AI proxy is unavailable.
  */
@@ -187,7 +204,7 @@ function heuristicRecommend(
     .map((s) => ({
       id: s.c.id,
       name: s.c.name,
-      reason: "mentioned in your prompt",
+      reason: connectionHelpReason(s.c),
       connected: s.c.connected,
     }));
 }
